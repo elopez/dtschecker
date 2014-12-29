@@ -1,19 +1,40 @@
 {-# LANGUAGE RecordWildCards #-}
 
-import Control.Applicative hiding ((<|>))
+module DTS where
+
+import Control.Applicative hiding ((<|>), many)
 
 import Text.Parsec.Language
 import qualified Text.Parsec.Token as Tok
 import Text.ParserCombinators.Parsec
 
+import Data.List
+
+import System.FilePath.Posix
+
 data PropertyValue = String String
 		   | Empty
-		   deriving (Show)
+		   deriving (Show, Eq)
 
-data DTS = Block String [DTS]
-	 | Property String PropertyValue
-	 | Label String DTS
+data DTS = Block    { _name    :: String, _content :: [DTS] }
+	 | Property { _key     :: String, _value   :: PropertyValue }
+	 | Label    { _name    :: String, _element :: DTS }
+	 | Include  { _file    :: String }
+	 | Version  { _version :: Int }
 	 deriving (Show)
+
+instance Eq DTS where
+	(Property s1 _) == (Property s2 _) = s1 == s2
+	(Block s1 _)    == (Block s2 _)    = s1 == s2
+	(Label s1 _)    == (Label s2 _)    = s1 == s2
+	(Version i1)    == (Version i2)    = i1 == i2
+
+instance Ord DTS where
+	(Block s1 _) `compare` (Block s2 _) = s1 `compare` s2
+
+-- similar to nub, but leaves the last element instead of the first
+unique :: (Eq a) => [a] -> [a]
+unique = reverse . nub . reverse
 
 -- Basic token parser for DTS
 Tok.TokenParser { .. } = dts_tokens
@@ -42,8 +63,8 @@ nodeName = lexeme $ full_name <|> root
 		root = string "/" <?> "root node name"
 		name = many1 (alphaNum <|> oneOf ",._+-") <?> "node name"
 		unit_address = name <?> "unit address"
-		at_address = do { char '@'; a <- unit_address; return $ '@' : a }
-		full_name = do { n <- name; a <- option "" at_address; return $ n ++ a }
+		at_address = (++) <$> string "@" <*> unit_address
+		full_name = (++) <$> name <*> option "" at_address
 
 -- ePAPR 2.2.4.1 Property Names
 propertyName = lexeme name
@@ -68,8 +89,61 @@ block = try (nodeLabel block') <|> block'
 		block_content = braces stmts
 		stmts = endBy (try property <|> block) semi
 
-directives :: Parser String
-directives = lexeme $ between (string "/") (string "/") (choice [string "include", string "dts-v1"]) <* manyTill anyChar (string "\n")
+directive :: Parser DTS
+directive = try (directive' "include" *> (Include <$> stringLiteral)) <|>
+	    try (directive' "dts-v1" *> semi *> (return $ Version 1))
+	    <?> "directive"
+	where
+		slash = string "/"
+		directive' d = lexeme $ between slash slash $ string d
 
-dts :: Parser DTS
-dts = whiteSpace *> directives *> block
+dts :: Parser [DTS]
+dts = (++) <$> (whiteSpace *> many directive) <*> endBy block semi
+
+parseFile :: FilePath -> IO [DTS]
+parseFile f = do content <- readFile f
+		 case parse dts f content of
+			Right d -> checkIncl d
+			Left _  -> return []
+	where
+		parseOther p = parseFile (replaceFileName f p)
+		checkIncl :: [DTS] -> IO [DTS]
+		checkIncl []               = return []
+		checkIncl ((Include p):xs) = do { x <- parseOther p ; checkIncl (x ++ xs) }
+		checkIncl (x:xs)           = (:) <$> pure x <*> checkIncl xs
+
+mergeDTS dt = (unique not_blocks) ++ mergeDTS' (sort blocks)
+	where
+		is_block (Block _ _) = True
+		is_block _           = False
+		(blocks, not_blocks) = partition is_block dt
+		mergeDTS' (xb@(Block x xc):yb@(Block y yc):xs) | x == y    = mergeDTS' ((Block x (mergeDTS (xc ++ yc))) : xs)
+							       | otherwise = xb : (mergeDTS' (yb:xs))
+		mergeDTS' x = x
+
+findLabels x = findLabelsMap [] x
+	where
+		findLabelsMap p c                          = concat $ map (findLabels' p) c
+		findLabels' path (Block ('&' : label) c)   = []
+		findLabels' path (Block n c)               = findLabelsMap (path ++ [n]) c
+		findLabels' path (Label label (Block n c)) = (label, path ++ [n]) : findLabelsMap (path ++ [n]) c
+		findLabels' path _                         = []
+
+replaceAlias x = dropLabelsMap x ++ findAliasMap x
+	where
+		labels = findLabels x
+		findAliasMap c                     = concat $ map findAlias c
+		findAlias (Block ('&' : label) c)  = maybe [] (\p -> generateFillerBlocks p c) (lookup label labels) ++ findAliasMap c
+		findAlias (Block n c)              = findAliasMap c
+		findAlias _                        = []
+		dropLabelsMap c                    = concat $ map dropLabels c
+		dropLabels (Block ('&' : label) _) = []
+		dropLabels (Label _ c)             = dropLabels c
+		dropLabels (Block n c)             = [Block n (dropLabelsMap c)]
+		dropLabels x                       = [x]
+		generateFillerBlocks (x:xs) e      = [Block x (generateFillerBlocks xs e)]
+		generateFillerBlocks [] e          = e
+
+loadDTS :: FilePath -> IO [DTS]
+loadDTS f = (mergeDTS . replaceAlias) <$> parseFile f
+
