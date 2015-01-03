@@ -7,12 +7,17 @@ import Control.Applicative hiding ((<|>), many)
 import Text.Parsec.Language
 import qualified Text.Parsec.Token as Tok
 import Text.ParserCombinators.Parsec
+import Text.ParserCombinators.Parsec.Number
 
 import Data.List
 
 import System.FilePath.Posix
 
 data PropertyValue = String String
+		   | Number Int
+		   | Handle String
+		   | List [PropertyValue]
+		   | Other String
 		   | Empty
 		   deriving (Show, Eq)
 
@@ -45,16 +50,17 @@ Tok.TokenParser { .. } = dts_tokens
 --				    , Tok.identStart = nodeNameChar
 --				    , Tok.identLetter = nodeNameChar
 				    , Tok.opStart = oneOf "<>={};,\""
-				    , Tok.opLetter = oneOf "<>={};,\""
+--				    , Tok.opLetter = oneOf "<>={};,\""
 				    , Tok.reservedOpNames = ["=", "<", ">",
 							     "{", "}", ";",
 							     ",", "\""]
 				    }
 
-nodeLabel :: Parser DTS -> Parser DTS
-nodeLabel p = Label <$> label_name <*> p <?> "node label"
-	where
-		label_name = lexeme $ manyTill (alphaNum <|> oneOf "_-") colon
+nodeLabel :: Parser String
+nodeLabel = lexeme (manyTill (alphaNum <|> oneOf "_-") colon) <?> "node label"
+
+labeledNode :: Parser DTS -> Parser DTS
+labeledNode p = Label <$> nodeLabel <*> p
 
 -- ePAPR 2.2.1.1 Node Name Requirements
 nodeName :: Parser String
@@ -71,23 +77,31 @@ propertyName = lexeme name
 	where
 		name = many1 (digit <|> lower <|> oneOf ",._+-?#") <?> "property name"
 
--- placeholder for any value
+manyTill1 p end = (:) <$> p <*> (manyTill p end)
+
+
+-- Property values
 propertyValue :: Parser PropertyValue
-propertyValue = String <$> lexeme (manyTill anyChar (lookAhead semi))
+propertyValue = List <$> angles (many1 propertyValue) <|>
+		Number <$> lexeme nat <|>
+		String <$> lexeme stringLiteral <|>
+		Handle <$> lexeme (char '&' *> try nodeLabel)
 
 -- ePAPR Appendix A, DTS Format v1
 property :: Parser DTS
 property = Property <$> propertyName <*> value
 	where
-		value = (reservedOp "=" *> propertyValue) <|> (lookAhead semi *> return Empty)
+		value = (reservedOp "=" *> propertyValue) <|>
+			(lookAhead semi *> return Empty) <|>
+			Other <$> try (lexeme (manyTill1 anyChar (lookAhead semi)))
 
 -- ePAPR Appendix A, DTS Format v1
 block :: Parser DTS
-block = try (nodeLabel block') <|> block'
+block = try (labeledNode block') <|> block'
 	where
 		block' = Block <$> nodeName <*> block_content
 		block_content = braces stmts
-		stmts = endBy (try property <|> block) semi
+		stmts = endBy (try block <|> property) semi
 
 directive :: Parser DTS
 directive = try (directive' "include" *> (Include <$> stringLiteral)) <|>
