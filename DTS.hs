@@ -22,7 +22,7 @@ data PropertyValue = String String
 		   deriving (Show, Eq)
 
 data DTS = Block    { _name    :: String, _content :: [DTS] }
-	 | Property { _key     :: String, _value   :: PropertyValue }
+	 | Property { _key     :: String, _value   :: [PropertyValue] }
 	 | Label    { _name    :: String, _element :: DTS }
 	 | Include  { _file    :: String }
 	 | Version  { _version :: Int }
@@ -56,11 +56,11 @@ Tok.TokenParser { .. } = dts_tokens
 							     ",", "\""]
 				    }
 
-nodeLabel :: Parser String
-nodeLabel = lexeme (manyTill (alphaNum <|> oneOf "_-") colon) <?> "node label"
+nodeLabel :: Parser a -> Parser String
+nodeLabel e = lexeme (manyTill (alphaNum <|> oneOf "_-") e) <?> "node label"
 
 labeledNode :: Parser DTS -> Parser DTS
-labeledNode p = Label <$> nodeLabel <*> p
+labeledNode p = Label <$> nodeLabel colon <*> p
 
 -- ePAPR 2.2.1.1 Node Name Requirements
 nodeName :: Parser String
@@ -85,15 +85,15 @@ propertyValue :: Parser PropertyValue
 propertyValue = List <$> angles (many1 propertyValue) <|>
 		Number <$> lexeme nat <|>
 		String <$> lexeme stringLiteral <|>
-		Handle <$> lexeme (char '&' *> try nodeLabel)
+		Handle <$> lexeme (char '&' *> many1 (alphaNum <|> oneOf "_-"))
 
 -- ePAPR Appendix A, DTS Format v1
 property :: Parser DTS
 property = Property <$> propertyName <*> value
 	where
-		value = (reservedOp "=" *> propertyValue) <|>
-			(lookAhead semi *> return Empty) <|>
-			Other <$> try (lexeme (manyTill1 anyChar (lookAhead semi)))
+		value = (reservedOp "=" *> sepBy1 propertyValue comma) <|>
+			(lookAhead semi *> return [Empty]) <|>
+			(\x -> [Other x]) <$> try (lexeme (manyTill1 anyChar (lookAhead semi)))
 
 -- ePAPR Appendix A, DTS Format v1
 block :: Parser DTS
