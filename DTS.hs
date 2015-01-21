@@ -1,6 +1,6 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module DTS where
+module DTS (DTS(..), PropertyValue(..), loadDTS) where
 
 import Control.Applicative hiding ((<|>), many)
 
@@ -27,6 +27,7 @@ data DTS = Block    { _name    :: String, _content :: [DTS] }
 	 | Label    { _name    :: String, _element :: DTS }
 	 | Include  { _file    :: String }
 	 | Version  { _version :: Int }
+	 | Define   { _data    :: String }
 	 deriving (Show)
 
 instance Eq DTS where
@@ -34,6 +35,7 @@ instance Eq DTS where
 	(Block s1 _)    == (Block s2 _)    = s1 == s2
 	(Label s1 _)    == (Label s2 _)    = s1 == s2
 	(Version i1)    == (Version i2)    = i1 == i2
+	(Define d1)     == (Define d2)     = d1 == d2
 
 instance Ord DTS where
 	(Block s1 _) `compare` (Block s2 _) = s1 `compare` s2
@@ -114,7 +116,10 @@ block = try (labeledNode block') <|> block'
 
 directive :: Parser DTS
 directive = try (directive' "include" *> (Include <$> stringLiteral)) <|>
-	    try (directive' "dts-v1" *> semi *> (return $ Version 1))
+	    try (directive' "dts-v1" *> semi *> (return $ Version 1)) <|>
+	    try (lexeme $ string "#include" *> (Include <$> stringLiteral)) <|>
+	    try (lexeme $ string "#include" *> (Include <$> ("include/"++) <$> (angles $ many1 $ noneOf ">"))) <|>
+	    try (lexeme $ string "#define" *> (Define <$> (many1 $ noneOf "\n")))
 	    <?> "directive"
 	where
 		slash = string "/"
@@ -152,20 +157,21 @@ findLabels x = findLabelsMap [] x
 		findLabels' path (Label label (Block n c)) = (label, path ++ [n]) : findLabelsMap (path ++ [n]) c
 		findLabels' path _                         = []
 
-replaceAlias x = dropLabelsMap x ++ findAliasMap x
+replaceAlias x = cleanTreeMap x ++ findAliasMap x
 	where
 		labels = findLabels x
-		findAliasMap c                     = concat $ map findAlias c
-		findAlias (Block ('&' : label) c)  = maybe [] (\p -> generateFillerBlocks p c) (lookup label labels) ++ findAliasMap c
-		findAlias (Block n c)              = findAliasMap c
-		findAlias _                        = []
-		dropLabelsMap c                    = concat $ map dropLabels c
-		dropLabels (Block ('&' : label) _) = []
-		dropLabels (Label _ c)             = dropLabels c
-		dropLabels (Block n c)             = [Block n (dropLabelsMap c)]
-		dropLabels x                       = [x]
-		generateFillerBlocks (x:xs) e      = [Block x (generateFillerBlocks xs e)]
-		generateFillerBlocks [] e          = e
+		findAliasMap c                    = concat $ map findAlias c
+		findAlias (Block ('&' : label) c) = maybe [] (\p -> generateFillerBlocks p c) (lookup label labels) ++ findAliasMap c
+		findAlias (Block n c)             = findAliasMap c
+		findAlias _                       = []
+		cleanTreeMap c                    = concat $ map cleanTree c
+		cleanTree (Block ('&' : label) _) = []
+		cleanTree (Label _ c)             = cleanTree c
+		cleanTree (Block n c)             = [Block n (cleanTreeMap c)]
+		cleanTree (Define _)              = []
+		cleanTree x                       = [x]
+		generateFillerBlocks (x:xs) e     = [Block x (generateFillerBlocks xs e)]
+		generateFillerBlocks [] e         = e
 
 loadDTS :: FilePath -> IO [DTS]
 loadDTS f = (mergeDTS . replaceAlias) <$> parseFile f
