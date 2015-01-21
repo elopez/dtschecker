@@ -17,6 +17,7 @@ data PropertyValue = String String
 		   | Number Int
 		   | Handle String
 		   | List [PropertyValue]
+		   | Macro String
 		   | Other String
 		   | Empty
 		   deriving (Show, Eq)
@@ -79,13 +80,21 @@ propertyName = lexeme name
 
 manyTill1 p end = (:) <$> p <*> (manyTill p end)
 
+cppMacro :: Parser String
+cppMacro = do c <- many $ alphaNum <|> char '_'
+	      p <- option "" $ parens $ many $ noneOf ")"
+	      if length c > 0 && length p > 0 then return $ c ++ "(" ++ p ++ ")"
+	      else if length c > 0 then return c
+	      else if length p > 0 then return $ "(" ++ p ++ ")"
+	      else fail "expected CPP-style macro application or constant"
 
 -- Property values
 propertyValue :: Parser PropertyValue
-propertyValue = List <$> angles (many1 propertyValue) <|>
+propertyValue = List <$> lexeme (angles (many1 propertyValue)) <|>
 		Number <$> lexeme nat <|>
 		String <$> lexeme stringLiteral <|>
-		Handle <$> lexeme (char '&' *> many1 (alphaNum <|> oneOf "_-"))
+		Handle <$> lexeme (char '&' *> many1 (alphaNum <|> oneOf "_-")) <|>
+		Macro <$> lexeme cppMacro
 
 -- ePAPR Appendix A, DTS Format v1
 property :: Parser DTS
