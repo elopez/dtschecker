@@ -68,7 +68,7 @@ nodeName :: Parser String
 nodeName = lexeme $ full_name <|> root
 	where
 		root = string "/" <?> "root node name"
-		name = many1 (alphaNum <|> oneOf ",._+-") <?> "node name"
+		name = many1 (alphaNum <|> oneOf ",._+-&") <?> "node name"
 		unit_address = name <?> "unit address"
 		at_address = (++) <$> string "@" <*> unit_address
 		full_name = (++) <$> name <*> option "" at_address
