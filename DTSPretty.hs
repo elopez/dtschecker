@@ -11,6 +11,7 @@ ppDTSValue (String s) = text $ show s
 ppDTSValue (Number n) = text $ show n
 ppDTSValue (Handle h) = text $ "&" ++ h
 ppDTSValue (List l)   = text "<" <> sep (map ppDTSValue l) <> text ">"
+ppDTSValue (Macro m)  = text m
 ppDTSValue (Other o)  = text o <> text " /* unparseable value */"
 ppDTSValue (Empty)    = text "/* empty */"
 
