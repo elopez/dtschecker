@@ -1,17 +1,12 @@
 {-# LANGUAGE RecordWildCards #-}
 
-module DTS (DTS(..), PropertyValue(..), loadDTS) where
+module DTS (DTS(..), PropertyValue(..), dts) where
 
 import Control.Applicative hiding ((<|>), many)
-
 import Text.Parsec.Language
 import qualified Text.Parsec.Token as Tok
 import Text.ParserCombinators.Parsec
 import Text.ParserCombinators.Parsec.Number
-
-import Data.List
-
-import System.FilePath.Posix
 
 data PropertyValue = String String
 		   | Number Int
@@ -36,13 +31,10 @@ instance Eq DTS where
 	(Label s1 _)    == (Label s2 _)    = s1 == s2
 	(Version i1)    == (Version i2)    = i1 == i2
 	(Define d1)     == (Define d2)     = d1 == d2
+	a == b                             = False -- is this right?
 
 instance Ord DTS where
 	(Block s1 _) `compare` (Block s2 _) = s1 `compare` s2
-
--- similar to nub, but leaves the last element instead of the first
-unique :: (Eq a) => [a] -> [a]
-unique = reverse . nub . reverse
 
 -- Basic token parser for DTS
 Tok.TokenParser { .. } = dts_tokens
@@ -127,52 +119,3 @@ directive = try (directive' "include" *> (Include <$> stringLiteral)) <|>
 
 dts :: Parser [DTS]
 dts = (++) <$> (whiteSpace *> many directive) <*> endBy block semi
-
-parseFile :: FilePath -> IO [DTS]
-parseFile f = do content <- readFile f
-		 case parse dts f content of
-			Right d -> checkIncl d
-			Left _  -> return []
-	where
-		parseOther p = parseFile (replaceFileName f p)
-		checkIncl :: [DTS] -> IO [DTS]
-		checkIncl []               = return []
-		checkIncl ((Include p):xs) = do { x <- parseOther p ; checkIncl (x ++ xs) }
-		checkIncl (x:xs)           = (:) <$> pure x <*> checkIncl xs
-
-mergeDTS dt = (unique not_blocks) ++ mergeDTS' (sort blocks)
-	where
-		is_block (Block _ _) = True
-		is_block _           = False
-		(blocks, not_blocks) = partition is_block dt
-		mergeDTS' (xb@(Block x xc):yb@(Block y yc):xs) | x == y    = mergeDTS' ((Block x (mergeDTS (xc ++ yc))) : xs)
-							       | otherwise = xb : (mergeDTS' (yb:xs))
-		mergeDTS' x = x
-
-findLabels x = findLabelsMap [] x
-	where
-		findLabelsMap p c                          = concat $ map (findLabels' p) c
-		findLabels' path (Block ('&' : label) c)   = []
-		findLabels' path (Block n c)               = findLabelsMap (path ++ [n]) c
-		findLabels' path (Label label (Block n c)) = (label, path ++ [n]) : findLabelsMap (path ++ [n]) c
-		findLabels' path _                         = []
-
-replaceAlias x = cleanTreeMap x ++ findAliasMap x
-	where
-		labels = findLabels x
-		findAliasMap c                    = concat $ map findAlias c
-		findAlias (Block ('&' : label) c) = maybe [] (\p -> generateFillerBlocks p c) (lookup label labels) ++ findAliasMap c
-		findAlias (Block n c)             = findAliasMap c
-		findAlias _                       = []
-		cleanTreeMap c                    = concat $ map cleanTree c
-		cleanTree (Block ('&' : label) _) = []
-		cleanTree (Label _ c)             = cleanTree c
-		cleanTree (Block n c)             = [Block n (cleanTreeMap c)]
-		cleanTree (Define _)              = []
-		cleanTree x                       = [x]
-		generateFillerBlocks (x:xs) e     = [Block x (generateFillerBlocks xs e)]
-		generateFillerBlocks [] e         = e
-
-loadDTS :: FilePath -> IO [DTS]
-loadDTS f = (mergeDTS . replaceAlias) <$> parseFile f
-
