@@ -68,9 +68,10 @@ nodeName = lexeme $ full_name <|> root
 		full_name = (++) <$> name <*> option "" at_address
 
 -- ePAPR 2.2.4.1 Property Names
+-- some DTs use uppercase letters on the names
 propertyName = lexeme name
 	where
-		name = many1 (digit <|> lower <|> oneOf ",._+-?#") <?> "property name"
+		name = many1 (digit <|> lower <|> upper <|> oneOf ",._+-?#") <?> "property name"
 
 manyTill1 p end = (:) <$> p <*> (manyTill p end)
 
@@ -109,8 +110,8 @@ block = try (labeledNode block') <|> block'
 directive :: Parser DTS
 directive = try (directive' "include" *> (Include <$> stringLiteral)) <|>
 	    try (directive' "dts-v1" *> semi *> (return $ Version 1)) <|>
-	    try (lexeme $ string "#include" *> (Include <$> stringLiteral)) <|>
-	    try (lexeme $ string "#include" *> (Include <$> ("include/"++) <$> (angles $ many1 $ noneOf ">"))) <|>
+	    try (lexeme $ string "#include" *> whiteSpace *> (Include <$> stringLiteral)) <|>
+	    try (lexeme $ string "#include" *> whiteSpace *> (Include <$> ("include/"++) <$> (angles $ many1 $ noneOf ">"))) <|>
 	    try (lexeme $ string "#define" *> (Define <$> (many1 $ noneOf "\n")))
 	    <?> "directive"
 	where
