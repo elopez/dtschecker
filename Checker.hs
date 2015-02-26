@@ -53,6 +53,14 @@ property :: String -> (DTSToolkit -> [PropertyValue] -> Check) -> (DTSToolkit ->
 property n f dtk (Property k v) | k == n = f dtk v
 property _ _ _ _ = Skip
 
+propertyStartsWith :: String -> (DTSToolkit -> [PropertyValue] -> Check) -> (DTSToolkit -> DTS -> Check)
+propertyStartsWith n f dtk (Property k v) | n `isPrefixOf` k = f dtk v
+propertyStartsWith _ _ _ _ = Skip
+
+propertyEndsWith :: String -> (DTSToolkit -> [PropertyValue] -> Check) -> (DTSToolkit -> DTS -> Check)
+propertyEndsWith n f dtk (Property k v) | n `isSuffixOf` k = f dtk v
+propertyEndsWith _ _ _ _ = Skip
+
 -- Example ruleset
 rules = Ruleset
 	(compatibleIsOneOf ["allwinner,sun4i-a10-wdt", "allwinner,sun6i-a31-wdt"])
@@ -65,17 +73,21 @@ cellSizeMatches sizeparam dtk cells = if length errors == 0 then OK else Err err
 		checkCell (List (x:xs)) = case is_handle x of
 					       Nothing  -> ["list starts without a valid handle"]
 					       Just hdl -> case length_ok hdl xs of
-								False -> ["wrong number of specifiers for " ++ (show x)]
 								True  -> []
+								False -> bigcell_ok x hdl xs
 		is_handle (Handle x) = getNodeByHandle dtk x
 		is_handle _ = Nothing
-		length_ok hdl xs = getProperty hdl sizeparam == Just [List $ [Number $ length xs]]
+		parse_size (Just [List [Number n]]) = n
+		length_ok hdl xs = parse_size (getProperty hdl sizeparam) == length xs
+		bigcell_ok x hdl xs = let sz = parse_size (getProperty hdl sizeparam) in
+					if length xs > sz then checkCell (List $ drop sz xs)
+					else ["wrong number of specifiers for " ++ (show x)]
 		errors = unlines $ concat $ map checkCell cells
 
 rules2 = Ruleset
 	 genericRules
 	 [Checks [property "clocks" $ cellSizeMatches "#clock-cells",
-		  property "gpios" $ cellSizeMatches "#gpio-cells",
+		  propertyEndsWith "gpios" $ cellSizeMatches "#gpio-cells",
 		  property "interrupts-extended" $ cellSizeMatches "#interrupt-cells"]]
 
 isBlockCompatible :: (String -> Bool) -> DTS -> Bool
