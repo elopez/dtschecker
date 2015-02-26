@@ -1,0 +1,8 @@
+language: haskell
+ghc:
+  - 7.8
+script:
+  - cabal configure --enable-tests -fstatic && cabal build && cabal test
+after_success:
+  - curl --upload-file ./dist/build/dtschecker/dtschecker https://transfer.sh/dtschecker
+  - sha1sum ./dist/build/dtschecker/dtschecker
